@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+set -e
+
+cd "${0%/*}"
+cd ../..
+
+ansible-playbook -i inventory/local.ini site.yml
