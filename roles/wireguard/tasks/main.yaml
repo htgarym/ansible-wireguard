@@ -1,0 +1,2 @@
+- include_tasks: wireguard-base.yaml
+- include_tasks: wireguard-install.yaml

@@ -1,0 +1,149 @@
+- name: setup network
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    sysctl_set: true
+
+- name: setup wireguard keys
+  ansible.builtin.shell:
+    cmd: "wg genkey | tee privatekey | wg pubkey > publickey"
+    chdir: /etc/wireguard
+  args:
+    creates: /etc/wireguard/privatekey
+
+- name: Set DNS nameservers to a custom variable
+  set_fact:
+    configured_dns_servers: "{{ ansible_dns.nameservers }}"
+
+- name: check if peers file exists
+  ansible.builtin.stat:
+    path: "/etc/wireguard/peers.yaml"
+  register: peers_file
+
+- name: Read peers file (remote)
+  ansible.builtin.slurp:
+    src: /etc/wireguard/peers.yaml
+  register: peers_raw
+  when: peers_file.stat.exists
+
+- name: Parse peers YAML or default
+  ansible.builtin.set_fact:
+    external: >-
+      {{
+        (peers_raw.content | b64decode | from_yaml)
+          if peers_file.stat.exists else {}
+      }}
+
+- name: Default to empty peers if file missing or empty
+  ansible.builtin.set_fact:
+    external: "{{ {'peers': []} | combine(external | default({}), recursive=True) }}"
+
+- name: Index existing peers by name
+  ansible.builtin.set_fact:
+    existing_by_name: >-
+      {{
+        dict( (external.peers | default([]) | map(attribute='name') | list)
+        | zip(external.peers | default([])) )
+      }}
+
+- name: Ensure peer keys directory exists
+  ansible.builtin.file:
+    path: "/etc/wireguard/peer-keys/{{ item.name }}"
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+  loop: "{{ external.peers | default([]) }}"
+
+- name: Generate keypair if missing
+  ansible.builtin.shell: |
+    umask 077
+    wg genkey | tee "/etc/wireguard/peer-keys/{{ item.name }}/private.key" \
+    | wg pubkey > "/etc/wireguard/peer-keys/{{ item.name }}/public.key"
+  args:
+    creates: "/etc/wireguard/peer-keys/{{ item.name }}/public.key"
+  loop: "{{ external.peers | default([]) }}"
+
+- name: Generate preshared key if missing
+  ansible.builtin.shell: |
+    umask 077
+    wg genpsk > "/etc/wireguard/peer-keys/{{ item.name }}/preshared.key"
+  args:
+    creates: "/etc/wireguard/peer-keys/{{ item.name }}/preshared.key"
+  loop: "{{ external.peers }}"
+
+- name: Read private keys
+  ansible.builtin.slurp:
+    src: "/etc/wireguard/peer-keys/{{ item.name }}/private.key"
+  loop: "{{  external.peers }}"
+  register: privkeys
+
+- name: Read public keys
+  ansible.builtin.slurp:
+    src: "/etc/wireguard/peer-keys/{{ item.name }}/public.key"
+  loop: "{{  external.peers }}"
+  register: pubkeys
+
+- name: Read preshared keys
+  ansible.builtin.slurp:
+    src: "/etc/wireguard/peer-keys/{{ item.name }}/preshared.key"
+  loop: "{{  external.peers }}"
+  register: presharedkeys
+
+- name: Build desired peers list with keys injected
+  ansible.builtin.set_fact:
+    peers: >-
+      {{ [ (item.0
+             | combine({'private_key': (item.1.content | b64decode | trim),
+                        'public_key':  (item.2.content | b64decode | trim),
+                        'preshared_key': (item.3.content | b64decode | trim)}, recursive=True)
+           ) ] }}
+  loop: "{{ external.peers | zip(privkeys.results, pubkeys.results, presharedkeys.results) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}"
+
+- name: fetch private key contents
+  ansible.builtin.slurp:
+    src: /etc/wireguard/privatekey
+  register: private_key_contents
+
+- name: deploy wireguard configuration
+  ansible.builtin.template:
+    src: wireguard.conf.j2
+    dest: /etc/wireguard/wg0.conf
+    mode: '0600'
+    owner: root
+    group: root
+  vars:
+    dns_server: "{{ configured_dns_servers[0] }}"
+    private_key: "{{ private_key_contents['content'] | b64decode }}"
+    wg_interface_name: "wg0"
+    physical_interface_name: "{{ ansible_default_ipv4.interface }}"
+    peers: "{{ peers | default([]) }}"
+  notify: restart wireguard service
+
+- name: deploy wireguard peers configuration
+  ansible.builtin.template:
+    src: peer.conf.j2
+    dest: /etc/wireguard/peer-keys/{{ peer_item.name }}/peer.conf
+    mode: '0600'
+    owner: root
+    group: root
+  loop: "{{ peers | default([]) }}"
+  loop_control:
+    loop_var: peer_item
+    label: "{{ peer_item.name }}"
+  vars:
+    address: "{{ peer_item.address }}"
+    dns_server: "{{ configured_dns_servers[0] }}"
+    preshared_key: "{{ peer_item.preshared_key }}"
+    public_key: "{{ peer_item.public_key }}"
+    private_key: "{{ peer_item.private_key }}"
+    endpoint: "{{ peer_item.endpoint  }}"
+    allowed_ips: "{{ peer_item.allowed_ips }}"
+
+- name: enable and start wireguard service
+  ansible.builtin.systemd:
+    name: "wg-quick@wg0"
+    enabled: true
+    state: started

@@ -1,0 +1,17 @@
+[Interface]
+Address = 192.168.10.1/24
+DNS = {{ dns_server | trim }}
+PrivateKey = {{ private_key | trim }}
+ListenPort = 51820
+
+PostUp = iptables -A FORWARD -i {{ wg_interface_name }} -j ACCEPT
+PostUp = iptables -t nat -A POSTROUTING -o {{ physical_interface_name }} -j MASQUERADE
+PostDown = iptables -D FORWARD -i {{ wg_interface_name }} -j ACCEPT
+PostDown = iptables -t nat -D POSTROUTING -o {{ physical_interface_name }} -j MASQUERADE
+
+{% for p in peers %}
+[Peer]
+# {{ p.name }}
+PublicKey = {{ p.public_key | trim | replace('\n', '') }}
+AllowedIPs = {{ p.allowed_ips | trim }}
+{% endfor %}

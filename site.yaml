@@ -3,3 +3,10 @@
   become: yes
   roles:
     - role: bootstrap
+
+- name: install and configure wireguard
+  hosts: local
+  become: yes
+  gather_facts: true
+  roles:
+    - role: wireguard

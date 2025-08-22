@@ -1,0 +1,11 @@
+[Interface]
+Address = {{ address | trim }}
+PrivateKey = {{ private_key | trim }}
+ListenPort = 51820
+
+[Peer]
+PublicKey = {{ public_key | trim }}
+PresharedKey = {{ preshared_key | trim }}
+Endpoint = 52.14.43.166:51820 # Replace with your server's public IP and port
+AllowedIPs = {{ allowed_ips }}
+PersistentKeepalive = 25

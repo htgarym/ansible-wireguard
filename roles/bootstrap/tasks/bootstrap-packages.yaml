@@ -1,0 +1,24 @@
+- name: remove packages
+  ansible.builtin.package:
+    name: "{{ item }}"
+    state: absent
+  with_items:
+    - curl-minimal
+
+- name: update packages
+  ansible.builtin.package:
+    name: "*"
+    state: latest
+
+- name: install packages
+  ansible.builtin.package:
+    name:
+    - git
+    - curl
+    - wget
+    - vim
+    - unzip
+    - jq
+    - htop
+    - tree
+    state: present
