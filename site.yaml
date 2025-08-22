@@ -1,0 +1,8 @@
+- name: core setup of all non k8s systems
+  hosts: all, !k8s, !k8sWorker
+  become: yes
+  roles:
+    - role: bootstrap
+  tags:
+    - all
+    - core
